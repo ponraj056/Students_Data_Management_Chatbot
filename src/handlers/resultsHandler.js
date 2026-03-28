@@ -380,45 +380,134 @@ async function handlePassFailStats(from, sem, user) {
       return;
     }
 
+    // ── Fetch student info for year mapping ───────────────────
+    const rollNos  = [...new Set(allResults.map(r => r.rollNo))];
+    const students = await Student.find({ registerNumber: { $in: rollNos } })
+      .lean().select('registerNumber yearOfStudy section department');
+    const studentMap = {};
+    students.forEach(s => { studentMap[s.registerNumber] = s; });
+
     const total       = allResults.length;
     const passed      = allResults.filter(r => r.status === 'PASS').length;
     const failed      = allResults.filter(r => r.status === 'FAIL').length;
     const passPercent = ((passed / total) * 100).toFixed(1);
 
+    const cgpaValues = allResults.filter(r => r.cgpa).map(r => parseFloat(r.cgpa));
+    const avgCGPA    = cgpaValues.length > 0
+      ? (cgpaValues.reduce((a, b) => a + b, 0) / cgpaValues.length).toFixed(2)
+      : 'N/A';
+
+    const label = sem ? `Semester ${sem}` : 'All Semesters';
+
+    // ── Message 1: Overall Summary ────────────────────────────
+    let msg1 = `📊 *PASS/FAIL STATISTICS*\n`;
+    msg1 += `📚 ${label}\n`;
+    if (dept) msg1 += `🏫 Dept: ${dept}\n`;
+    msg1 += `━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    msg1 += `📋 Total Records : ${total}\n`;
+    msg1 += `✅ Passed        : ${passed} (${passPercent}%)\n`;
+    msg1 += `❌ Failed        : ${failed} (${(100 - parseFloat(passPercent)).toFixed(1)}%)\n`;
+    msg1 += `🎯 Avg CGPA      : ${avgCGPA}\n\n`;
+
+    // Grade distribution
     const grades = {};
     allResults.forEach(r => {
       const g = r.grade || 'N/A';
       grades[g] = (grades[g] || 0) + 1;
     });
-
-    const cgpaValues = allResults.filter(r => r.cgpa).map(r => parseFloat(r.cgpa));
-    const avgCGPA = cgpaValues.length > 0
-      ? (cgpaValues.reduce((a, b) => a + b, 0) / cgpaValues.length).toFixed(2)
-      : 'N/A';
-
-    const label = sem ? `Semester ${sem}` : 'All Semesters';
-    let msg = `📊 *PASS/FAIL STATISTICS*\n📚 ${label}\n`;
-    if (dept) msg += `🏫 Dept: ${dept}\n`;
-    msg += `━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
-    msg += `📋 Total Records : ${total}\n`;
-    msg += `✅ Passed        : ${passed} (${passPercent}%)\n`;
-    msg += `❌ Failed        : ${failed} (${(100 - parseFloat(passPercent)).toFixed(1)}%)\n`;
-    msg += `🎯 Avg CGPA      : ${avgCGPA}\n\n`;
-    msg += `📈 *Grade Distribution:*\n`;
-
+    msg1 += `📈 *Grade Distribution:*\n`;
     const gradeOrder = ['O', 'A+', 'A', 'B+', 'B', 'C', 'U', 'N/A'];
     gradeOrder.forEach(g => {
       if (grades[g]) {
         const pct = ((grades[g] / total) * 100).toFixed(1);
         const bar = '█'.repeat(Math.round(pct / 5));
-        msg += `${g.padEnd(3)} : ${bar} ${grades[g]} (${pct}%)\n`;
+        msg1 += `${g.padEnd(3)} : ${bar} ${grades[g]} (${pct}%)\n`;
       }
     });
     Object.keys(grades).forEach(g => {
-      if (!gradeOrder.includes(g)) msg += `${g.padEnd(3)} : ${grades[g]}\n`;
+      if (!gradeOrder.includes(g)) msg1 += `${g.padEnd(3)} : ${grades[g]}\n`;
+    });
+    await sendTextMessage(from, msg1);
+
+    // ── Message 2: Year-wise Statistics ──────────────────────
+    const yearMap = { 1: {}, 2: {}, 3: {}, 4: {}, 'N/A': {} };
+    allResults.forEach(r => {
+      const s    = studentMap[r.rollNo];
+      const year = s?.yearOfStudy || 'N/A';
+      if (!yearMap[year]) yearMap[year] = {};
+      if (!yearMap[year][r.rollNo]) yearMap[year][r.rollNo] = { pass: 0, fail: 0 };
+      if (r.status === 'PASS') yearMap[year][r.rollNo].pass++;
+      else yearMap[year][r.rollNo].fail++;
     });
 
-    await sendTextMessage(from, msg);
+    let msg2 = `🎓 *YEAR-WISE STATISTICS*\n`;
+    msg2 += `📚 ${label}\n`;
+    msg2 += `━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    for (const year of [1, 2, 3, 4]) {
+      const yearStudents = yearMap[year];
+      if (!yearStudents || Object.keys(yearStudents).length === 0) continue;
+
+      const totalStudents = Object.keys(yearStudents).length;
+      const failStudents  = Object.values(yearStudents).filter(v => v.fail > 0).length;
+      const passStudents  = totalStudents - failStudents;
+      const passPct       = ((passStudents / totalStudents) * 100).toFixed(1);
+      const failPct       = ((failStudents / totalStudents) * 100).toFixed(1);
+
+      msg2 += `📅 *Year ${year}*\n`;
+      msg2 += `   Students    : ${totalStudents}\n`;
+      msg2 += `   ✅ Pass     : ${passStudents} (${passPct}%)\n`;
+      msg2 += `   ❌ Fail     : ${failStudents} (${failPct}%)\n\n`;
+    }
+    await sendTextMessage(from, msg2);
+
+    // ── Message 3: Semester-wise Statistics ───────────────────
+    const semMap = {};
+    allResults.forEach(r => {
+      const s = r.semester || 'N/A';
+      if (!semMap[s]) semMap[s] = { total: 0, passed: 0, failed: 0, students: new Set() };
+      semMap[s].total++;
+      semMap[s].students.add(r.rollNo);
+      if (r.status === 'PASS') semMap[s].passed++;
+      else semMap[s].failed++;
+    });
+
+    let msg3 = `📚 *SEMESTER-WISE STATISTICS*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    for (const s of Object.keys(semMap).sort((a, b) => a - b)) {
+      const d       = semMap[s];
+      const pPct    = ((d.passed / d.total) * 100).toFixed(1);
+      const fPct    = ((d.failed / d.total) * 100).toFixed(1);
+      msg3 += `📖 *Semester ${s}*\n`;
+      msg3 += `   Students : ${d.students.size} | Records : ${d.total}\n`;
+      msg3 += `   ✅ Pass  : ${d.passed} (${pPct}%)\n`;
+      msg3 += `   ❌ Fail  : ${d.failed} (${fPct}%)\n\n`;
+    }
+    await sendTextMessage(from, msg3);
+
+    // ── Message 4: Subject-wise Failure Count ─────────────────
+    const subMap = {};
+    allResults.forEach(r => {
+      const sub = r.subject || 'Unknown';
+      if (!subMap[sub]) subMap[sub] = { total: 0, failed: 0, semester: r.semester };
+      subMap[sub].total++;
+      if (r.status === 'FAIL') subMap[sub].failed++;
+    });
+
+    const subSorted = Object.entries(subMap)
+      .filter(([, d]) => d.failed > 0)
+      .sort((a, b) => b[1].failed - a[1].failed);
+
+    if (subSorted.length > 0) {
+      let msg4 = `📝 *SUBJECT-WISE FAILURE*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+      subSorted.slice(0, 15).forEach(([sub, d]) => {
+        const failPct = ((d.failed / d.total) * 100).toFixed(1);
+        msg4 += `❌ *${sub}*`;
+        if (d.semester) msg4 += ` (Sem ${d.semester})`;
+        msg4 += `\n   Failed: ${d.failed}/${d.total} (${failPct}%)\n\n`;
+      });
+      if (subSorted.length > 15) msg4 += `... and ${subSorted.length - 15} more subjects\n`;
+      await sendTextMessage(from, msg4);
+    }
 
   } catch (err) {
     logger.error('Pass/fail stats error:', err);

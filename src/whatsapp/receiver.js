@@ -244,17 +244,19 @@ async function processMessage(from, message) {
         );
         return;
 
-      case 'RESULTS':
-        setStage(from, STAGES.AWAITING_RESULTS);
-        await sendTextMessage(from,
-          'Results Mode is now ON\n\n' +
-          'Options:\n' +
-          '- Roll number : 922523205001\n' +
-          '- Toppers     : toppers sem 5\n' +
-          '- Arrears     : arrear students\n' +
-          '- Statistics  : pass fail stats\n\n' +
-          'Type menu to exit this mode.'
-        );
+     case 'RESULTS':
+  setStage(from, STAGES.AWAITING_RESULTS);
+  await sendTextMessage(from,
+    '📊 *Results Mode is now ON*\n\n' +
+    '*Options:*\n' +
+    '▪ Roll number    : 922523205001\n' +
+    '▪ Toppers        : toppers sem 5\n' +
+    '▪ Arrears        : arrear students\n' +
+    '▪ Statistics     : pass fail stats\n' +
+    '▪ CGPA Ranking   : cgpa ranking\n' +
+    '▪ Subject Analysis : subject analysis sem 5\n\n' +
+    'Type *menu* to exit this mode.'
+  );
         return;
 
       case 'UPLOAD':
