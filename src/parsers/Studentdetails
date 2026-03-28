@@ -1,0 +1,439 @@
+// src/parsers/studentDetails.js
+// UPDATED: Fuzzy name search + update hint after student card
+
+const mongoose = require('mongoose');
+const { sendTextMessage, sendImage } = require('../whatsapp/sender');
+
+// ─── Schema ───────────────────────────────────────────────────────
+const studentSchema = new mongoose.Schema({
+  registerNumber:    String,
+  name:              String,
+  gender:            String,
+  dob:               Date,
+  bloodGroup:        String,
+  aadhaarNumber:     String,
+  community:         String,
+  religion:          String,
+  photo:             String,
+  cutoffMark:        Number,
+  mobileNumber:      String,
+  email:             String,
+  address:           String,
+  hostelStudent:     String,
+  collegeBusUser:    String,
+  fatherName:        String,
+  fatherOccupation:  String,
+  fatherMobile:      String,
+  motherName:        String,
+  motherOccupation:  String,
+  motherMobile:      String,
+  guardianName:      String,
+  guardianMobile:    String,
+  guardianMobile2:   String,
+  numberOfSiblings:  Number,
+  department:        String,
+  course:            String,
+  batchYear:         String,
+  yearOfStudy:       Number,
+  section:           String,
+  admissionType:     String,
+  firstGraduate:     String,
+  tenthSchool:       String,
+  tenthPercentage:   mongoose.Schema.Types.Mixed,
+  twelfthSchool:     String,
+  twelfthPercentage: mongoose.Schema.Types.Mixed,
+  twelfthGroup:      String,
+  diplomaCollege:    String,
+  diplomaPercentage: mongoose.Schema.Types.Mixed,
+  arrear:            String,
+  cgpa:              Number,
+  placementStatus:   String,
+  numberOfCompanies: mongoose.Schema.Types.Mixed,
+  companyName:       String,
+  highestPackage:    mongoose.Schema.Types.Mixed,
+  internshipDetails: String,
+  parentsIncome:     String,
+  updatedAt:         { type: Date, default: Date.now },
+}, { collection: 'students', strict: false });
+// Delete cached model to always get fresh data
+delete mongoose.models.Student;
+const Student = mongoose.model('Student', studentSchema);
+// ─── Session Store ────────────────────────────────────────────────
+const sessions = {};
+
+// ─── Safe value display ───────────────────────────────────────────
+const EMPTY = ['nil', 'nill', 'null', 'undefined', 'n/a', 'no', '', 'none'];
+const val = (v) => {
+  if (v === null || v === undefined) return 'N/A';
+  const s = v.toString().trim();
+  if (s === '') return 'N/A';
+  if (EMPTY.includes(s.toLowerCase())) return 'N/A';
+  return s;
+};
+
+const fixPercent = (v) => {
+  if (v === null || v === undefined) return 'N/A';
+  const s = v.toString().trim().toUpperCase();
+  if (s === 'ALL PASS' || s === 'ALLPASS') return 'ALL PASS';
+  const n = parseFloat(s);
+  if (isNaN(n)) return s;
+  if (n > 0 && n < 2) return `${(n * 100).toFixed(1)}%`;
+  return `${n}%`;
+};
+
+const fixIncome = (v) => {
+  if (!v) return 'N/A';
+  const s = v.toString().replace(/\s+/g, '').trim();
+  const n = parseFloat(s);
+  if (!isNaN(n)) return `Rs.${n.toLocaleString('en-IN')}/year`;
+  return v.toString();
+};
+
+const short = (v, max = 32) => {
+  const s = val(v);
+  if (s === 'N/A') return s;
+  return s.length > max ? s.substring(0, max - 2) + '..' : s;
+};
+
+const row = (label, value) => {
+  const padded = label.padEnd(14, ' ');
+  return `▪ ${padded}: ${value}`;
+};
+
+// ─── Fuzzy name search ────────────────────────────────────────────
+// Finds students even with spelling mistakes using multiple strategies
+async function fuzzySearch(searchName, year, dept) {
+  const upper = searchName.trim().toUpperCase();
+
+  // Strategy 1: Direct regex match (normal search)
+let results = await Student.find({
+  yearOfStudy: year,
+  department:  dept,
+  name: { $regex: searchName.trim(), $options: 'i' }
+}).sort({ updatedAt: -1 }).lean();
+
+  if (results.length > 0) return { results, matched: 'exact' };
+
+  // Strategy 2: Search each word separately
+  const words = upper.split(/\s+/).filter(w => w.length >= 2);
+  if (words.length > 0) {
+    const wordRegex = words.map(w => `(?=.*${w})`).join('');
+    results = await Student.find({
+      yearOfStudy: year,
+      department:  dept,
+      name: { $regex: wordRegex, $options: 'i' }
+    }).sort({ updatedAt: -1 });
+    if (results.length > 0) return { results, matched: 'words' };
+  }
+
+  // Strategy 3: First 3 chars of each word (handles spelling errors)
+  const partials = upper.split(/\s+/)
+    .filter(w => w.length >= 3)
+    .map(w => w.substring(0, 3));
+
+  if (partials.length > 0) {
+    const allStudents = await Student.find({
+      yearOfStudy: year,
+      department:  dept,
+    }).lean();
+
+    // Score each student by how many partial matches they have
+    const scored = allStudents
+      .map(s => {
+        const sName = (s.name || '').toUpperCase();
+        const score = partials.filter(p => sName.includes(p)).length;
+        return { s, score };
+      })
+      .filter(x => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(x => x.s);
+
+    if (scored.length > 0) return { results: scored, matched: 'fuzzy' };
+  }
+
+  return { results: [], matched: 'none' };
+}
+
+// ─── Update hint shown after student card ─────────────────────────
+function updateHint(regNo) {
+  return `\n✏️ *To update any field:*\n\`Update_${regNo}_FieldName into NewValue\`\n\n*Examples:*\n▪ \`Update_${regNo}_Section into B\`\n▪ \`Update_${regNo}_CGPA into 8.5\`\n▪ \`Update_${regNo}_Mobile into 9876543210\`\n▪ \`Update_${regNo}_BloodGroup into O+ve\``;
+}
+
+// ─── Extract Google Drive File ID ─────────────────────────────────
+function getDriveFileId(photoField) {
+  if (!photoField) return null;
+  const str = photoField.toString().trim();
+  const openMatch  = str.match(/open\?id=([-\w]+)/);
+  if (openMatch)  return openMatch[1];
+  const shareMatch = str.match(/\/d\/([-\w]+)/);
+  if (shareMatch) return shareMatch[1];
+  return null;
+}
+
+// ─── Send photo via Google Drive ──────────────────────────────────
+async function sendPhotoToUser(to, fileId, caption) {
+  const axios = require('axios');
+  const fs    = require('fs');
+  const path  = require('path');
+  const os    = require('os');
+
+  try {
+    const urlsToTry = [
+      `https://lh3.googleusercontent.com/d/${fileId}`,
+      `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`,
+      `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`,
+    ];
+
+    let imageBuffer = null;
+    for (const url of urlsToTry) {
+      try {
+        const res = await axios.get(url, {
+          responseType: 'arraybuffer',
+          timeout: 15000,
+          maxRedirects: 10,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        });
+        if (res.data.byteLength > 10000) { imageBuffer = res.data; break; }
+      } catch (_) { continue; }
+    }
+
+    if (!imageBuffer) { console.log(`⚠️ Could not download Drive photo: ${fileId}`); return false; }
+
+    const tempPath = path.join(os.tmpdir(), `student_${fileId}_${Date.now()}.jpg`);
+    fs.writeFileSync(tempPath, imageBuffer);
+    await sendImage(to, tempPath, caption);
+    try { fs.unlinkSync(tempPath); } catch (_) {}
+    console.log(`📸 Photo sent to ${to}`);
+    return true;
+  } catch (err) {
+    console.log(`⚠️ Drive photo failed: ${err.message}`);
+    return false;
+  }
+}
+
+// ─── Format full student card ─────────────────────────────────────
+function formatStudent(s, index, total) {
+  const dob    = s.dob ? new Date(s.dob).toLocaleDateString('en-IN') : 'N/A';
+  const header = total > 1 ? `\n*[ Student ${index + 1} of ${total} ]*\n` : '';
+
+  return `${header}━━━━━━━━━━━━━━━━━━━━━━━
+🎓 *STUDENT PROFILE*
+━━━━━━━━━━━━━━━━━━━━━━━
+
+👤 *PERSONAL*
+${row('Name',        '*' + val(s.name) + '*')}
+${row('Reg No',      val(s.registerNumber))}
+${row('Gender',      val(s.gender))}
+${row('DOB',         dob)}
+${row('Blood Grp',   val(s.bloodGroup))}
+${row('Community',   val(s.community))}
+${row('Religion',    val(s.religion))}
+${row('Aadhaar',     val(s.aadhaarNumber))}
+
+📞 *CONTACT*
+${row('Mobile',      val(s.mobileNumber))}
+${row('Email',       short(s.email, 32))}
+${row('Address',     short(s.address, 32))}
+${row('Hostel',      val(s.hostelStudent))}
+${row('College Bus', val(s.collegeBusUser))}
+
+👨‍👩‍👦 *FAMILY*
+${row('Father',      val(s.fatherName))}
+${row('Father Occ',  val(s.fatherOccupation))}
+${row('Father Mob',  val(s.fatherMobile))}
+${row('Mother',      val(s.motherName))}
+${row('Mother Occ',  val(s.motherOccupation))}
+${row('Mother Mob',  val(s.motherMobile))}
+${row('Guardian',    val(s.guardianName))}
+${row('Guard Mob',   val(s.guardianMobile))}
+${row('Guard Mob2',  val(s.guardianMobile2))}
+${row('Siblings',    val(s.numberOfSiblings))}
+${row('Income',      fixIncome(s.parentsIncome))}
+
+🏫 *ACADEMIC*
+${row('Department',  val(s.department))}
+${row('Course',      val(s.course))}
+${row('Batch',       val(s.batchYear))}
+${row('Year',        val(s.yearOfStudy))}
+${row('Section',     val(s.section))}
+${row('Admission',   val(s.admissionType))}
+${row('First Grad',  val(s.firstGraduate))}
+${row('Cutoff',      val(s.cutoffMark))}
+
+📝 *EDUCATION*
+${row('10th School', short(s.tenthSchool, 32))}
+${row('10th %',      fixPercent(s.tenthPercentage))}
+${row('12th School', short(s.twelfthSchool, 32))}
+${row('12th %',      fixPercent(s.twelfthPercentage))}
+${row('12th Group',  val(s.twelfthGroup))}
+${row('Diploma Clg', short(s.diplomaCollege, 32))}
+${row('Diploma %',   fixPercent(s.diplomaPercentage))}
+
+📊 *PERFORMANCE*
+${row('CGPA',        val(s.cgpa))}
+${row('Arrear',      val(s.arrear))}
+
+💼 *PLACEMENT*
+${row('Status',      val(s.placementStatus))}
+${row('Companies',   val(s.numberOfCompanies))}
+${row('Company',     val(s.companyName))}
+${row('Package LPA', val(s.highestPackage))}
+${row('Internship',  short(s.internshipDetails, 32))}
+
+━━━━━━━━━━━━━━━━━━━━━━━`.trim();
+}
+
+// ─── Main Handler ─────────────────────────────────────────────────
+async function handleStudentDetails(from, messageText) {
+  const text = messageText.trim().toLowerCase();
+
+  if (!sessions[from]) sessions[from] = { step: 'ask_year' };
+  const session = sessions[from];
+
+  // ── Step 1: Ask Year ──────────────────────────────────────────
+  if (session.step === 'ask_year') {
+    session.step = 'get_year';
+    await sendTextMessage(from,
+      `🎓 *Student Details Lookup*\n\nSelect year of study:\n\n1️⃣  1st Year\n2️⃣  2nd Year\n3️⃣  3rd Year\n4️⃣  4th Year\n\nReply with *1, 2, 3 or 4*`
+    );
+    return null;
+  }
+
+  // ── Step 2: Get Year ──────────────────────────────────────────
+  if (session.step === 'get_year') {
+    const yearMap = {
+      '1': 1, '2': 2, '3': 3, '4': 4,
+      '1st': 1, '2nd': 2, '3rd': 3, '4th': 4,
+      'first': 1, 'second': 2, 'third': 3, 'fourth': 4
+    };
+    const year = yearMap[text];
+    if (!year) {
+      await sendTextMessage(from, `⚠️ Please reply with *1, 2, 3 or 4*`);
+      return null;
+    }
+
+    session.year = year;
+    session.step = 'get_dept';
+
+    const depts = await Student.distinct('department', { yearOfStudy: year });
+    if (depts.length === 0) {
+      delete sessions[from];
+      await sendTextMessage(from, `⚠️ No students found for *Year ${year}*.\nType *student details* to try again.`);
+      return null;
+    }
+
+    session.deptOptions = depts.sort();
+    const deptList = depts.sort().map((d, i) => `${i + 1}. ${d}`).join('\n');
+    await sendTextMessage(from, `📚 *Year ${year} — Select Department:*\n\n${deptList}\n\nReply with *number* or *department name*`);
+    return null;
+  }
+
+  // ── Step 3: Get Department ────────────────────────────────────
+  if (session.step === 'get_dept') {
+    const depts  = session.deptOptions;
+    const num    = parseInt(text);
+    let selected = null;
+
+    if (!isNaN(num) && num >= 1 && num <= depts.length) {
+      selected = depts[num - 1];
+    } else {
+      selected = depts.find(d => d.toLowerCase() === text || d.toLowerCase().includes(text));
+    }
+
+    if (!selected) {
+      const deptList = depts.map((d, i) => `${i + 1}. ${d}`).join('\n');
+      await sendTextMessage(from, `⚠️ Not found. Choose from:\n\n${deptList}`);
+      return null;
+    }
+
+    session.department = selected;
+    session.step       = 'get_name';
+    await sendTextMessage(from, `🔍 *${selected} — Year ${session.year}*\n\nType student name or first few letters:`);
+    return null;
+  }
+
+  // ── Step 4: Fuzzy Search & Return Full Details ────────────────
+  if (session.step === 'get_name') {
+    const searchName = messageText.trim();
+    const year       = session.year;
+    const dept       = session.department;
+    delete sessions[from];
+
+    // Fuzzy search — handles spelling mistakes
+    const { results: allStudents, matched } = await fuzzySearch(searchName, year, dept);
+
+    if (allStudents.length === 0) {
+      await sendTextMessage(from,
+        `❌ No student found with *"${searchName}"* in *${dept}, Year ${year}*.\n\n💡 Try first few letters of the name.\n\nType *student details* to search again.`
+      );
+      return null;
+    }
+
+    // Deduplicate by registerNumber — keep latest
+    const seen = new Set();
+    const students = allStudents.filter(s => {
+      const key = s.registerNumber || s._id.toString();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    // Show fuzzy match notice if spelling was off
+    if (matched === 'fuzzy') {
+      await sendTextMessage(from,
+        `🔍 Exact match not found for *"${searchName}"*.\nShowing closest matches:`
+      );
+    }
+
+    // ── Single student ────────────────────────────────────────
+    if (students.length === 1) {
+      const s      = students[0];
+      const fileId = getDriveFileId(s.photo);
+      if (fileId) await sendPhotoToUser(from, fileId, `📸 ${val(s.name)} | ${val(s.registerNumber)}`);
+
+      // Student card + update hint
+      await sendTextMessage(from,
+        formatStudent(s, 0, 1) +
+        `\n\n${updateHint(val(s.registerNumber))}` +
+        `\n\n📌 Type *student details* to search again.`
+      );
+      return null;
+    }
+
+    // ── Multiple students ─────────────────────────────────────
+    const summary = students.map((s, i) =>
+      `${i + 1}. *${val(s.name)}*  |  Reg: ${val(s.registerNumber)}  |  Sec: ${val(s.section)}`
+    ).join('\n');
+
+    await sendTextMessage(from,
+      `👥 *${students.length} students found for "${searchName}":*\n\n${summary}\n\nSending full details below...`
+    );
+
+    for (let i = 0; i < students.length; i++) {
+      const s      = students[i];
+      const fileId = getDriveFileId(s.photo);
+      if (fileId) await sendPhotoToUser(from, fileId, `📸 ${val(s.name)} | ${val(s.registerNumber)}`);
+
+      // Each student card + their own update hint
+      await sendTextMessage(from,
+        formatStudent(s, i, students.length) +
+        `\n\n${updateHint(val(s.registerNumber))}`
+      );
+    }
+
+    await sendTextMessage(from,
+      `📌 All *${students.length}* students shown above.\nType *student details* to search again.`
+    );
+    return null;
+  }
+
+  delete sessions[from];
+  await sendTextMessage(from, `Something went wrong. Type *student details* to start again.`);
+  return null;
+}
+
+function resetSession(from) {
+  delete sessions[from];
+}
+
+module.exports = { handleStudentDetails, resetSession, sessions };

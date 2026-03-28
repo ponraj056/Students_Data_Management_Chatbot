@@ -1,0 +1,294 @@
+// src/parsers/updateStudent.js
+// Handles instant student field updates via WhatsApp command
+//
+// Format 1 — Update by field value (existing):
+//   Update_FieldName_OldValue into NewValue
+//
+// Format 2 — Update by Register Number (NEW):
+//   Update_RegisterNumber_FieldName into NewValue
+//
+// Examples:
+//   Update_Section_N/A into B              ← by old value
+//   Update_922523205002_Section into B     ← by reg number ✅
+//   Update_922523205002_CGPA into 8.5      ← by reg number ✅
+//   Update_922523205002_Mobile into 9876543210
+
+const mongoose = require('mongoose');
+
+const studentSchema = new mongoose.Schema({
+  registerNumber:    String,
+  name:              String,
+  gender:            String,
+  dob:               Date,
+  bloodGroup:        String,
+  aadhaarNumber:     String,
+  community:         String,
+  religion:          String,
+  cutoffMark:        Number,
+  mobileNumber:      String,
+  email:             String,
+  address:           String,
+  hostelStudent:     String,
+  collegeBusUser:    String,
+  fatherName:        String,
+  fatherOccupation:  String,
+  fatherMobile:      String,
+  motherName:        String,
+  motherOccupation:  String,
+  motherMobile:      String,
+  guardianName:      String,
+  guardianMobile:    String,
+  guardianMobile2:   String,
+  numberOfSiblings:  Number,
+  department:        String,
+  course:            String,
+  batchYear:         String,
+  yearOfStudy:       Number,
+  section:           String,
+  admissionType:     String,
+  firstGraduate:     String,
+  tenthSchool:       String,
+  tenthPercentage:   mongoose.Schema.Types.Mixed,
+  twelfthSchool:     String,
+  twelfthPercentage: mongoose.Schema.Types.Mixed,
+  twelfthGroup:      String,
+  diplomaCollege:    String,
+  diplomaPercentage: mongoose.Schema.Types.Mixed,
+  arrear:            String,
+  cgpa:              Number,
+  placementStatus:   String,
+  numberOfCompanies: mongoose.Schema.Types.Mixed,
+  companyName:       String,
+  highestPackage:    mongoose.Schema.Types.Mixed,
+  internshipDetails: String,
+  parentsIncome:     String,
+}, { collection: 'students' });
+
+const Student = mongoose.models.Student || mongoose.model('Student', studentSchema);
+
+// ─── Field Name Mapping ───────────────────────────────────────────
+const FIELD_MAP = {
+  'name':               { field: 'name',              type: 'string' },
+  'gender':             { field: 'gender',             type: 'string' },
+  'dob':                { field: 'dob',                type: 'date'   },
+  'bloodgroup':         { field: 'bloodGroup',         type: 'string' },
+  'blood_group':        { field: 'bloodGroup',         type: 'string' },
+  'community':          { field: 'community',          type: 'string' },
+  'religion':           { field: 'religion',           type: 'string' },
+  'mobile':             { field: 'mobileNumber',       type: 'string' },
+  'mobilenumber':       { field: 'mobileNumber',       type: 'string' },
+  'mobile_number':      { field: 'mobileNumber',       type: 'string' },
+  'phone':              { field: 'mobileNumber',       type: 'string' },
+  'email':              { field: 'email',              type: 'string' },
+  'address':            { field: 'address',            type: 'string' },
+  'hostel':             { field: 'hostelStudent',      type: 'string' },
+  'hostelstudent':      { field: 'hostelStudent',      type: 'string' },
+  'bus':                { field: 'collegeBusUser',     type: 'string' },
+  'collegebus':         { field: 'collegeBusUser',     type: 'string' },
+  'fathername':         { field: 'fatherName',         type: 'string' },
+  'father_name':        { field: 'fatherName',         type: 'string' },
+  'fatheroccupation':   { field: 'fatherOccupation',   type: 'string' },
+  'fathermobile':       { field: 'fatherMobile',       type: 'string' },
+  'father_mobile':      { field: 'fatherMobile',       type: 'string' },
+  'mothername':         { field: 'motherName',         type: 'string' },
+  'mother_name':        { field: 'motherName',         type: 'string' },
+  'motheroccupation':   { field: 'motherOccupation',   type: 'string' },
+  'mothermobile':       { field: 'motherMobile',       type: 'string' },
+  'mother_mobile':      { field: 'motherMobile',       type: 'string' },
+  'guardianname':       { field: 'guardianName',       type: 'string' },
+  'guardianmobile':     { field: 'guardianMobile',     type: 'string' },
+  'siblings':           { field: 'numberOfSiblings',   type: 'number' },
+  'department':         { field: 'department',         type: 'string' },
+  'dept':               { field: 'department',         type: 'string' },
+  'course':             { field: 'course',             type: 'string' },
+  'batchyear':          { field: 'batchYear',          type: 'string' },
+  'batch_year':         { field: 'batchYear',          type: 'string' },
+  'section':            { field: 'section',            type: 'string' },
+  'admissiontype':      { field: 'admissionType',      type: 'string' },
+  'admission_type':     { field: 'admissionType',      type: 'string' },
+  'firstgraduate':      { field: 'firstGraduate',      type: 'string' },
+  'first_graduate':     { field: 'firstGraduate',      type: 'string' },
+  'cutoff':             { field: 'cutoffMark',         type: 'number' },
+  'cutoffmark':         { field: 'cutoffMark',         type: 'number' },
+  'cgpa':               { field: 'cgpa',               type: 'number' },
+  'arrear':             { field: 'arrear',             type: 'string' },
+  'tenthschool':        { field: 'tenthSchool',        type: 'string' },
+  '10th_school':        { field: 'tenthSchool',        type: 'string' },
+  'tenthpercentage':    { field: 'tenthPercentage',    type: 'number' },
+  '10th_percentage':    { field: 'tenthPercentage',    type: 'number' },
+  'twelfthschool':      { field: 'twelfthSchool',      type: 'string' },
+  '12th_school':        { field: 'twelfthSchool',      type: 'string' },
+  'twelfthpercentage':  { field: 'twelfthPercentage',  type: 'number' },
+  '12th_percentage':    { field: 'twelfthPercentage',  type: 'number' },
+  'twelfthgroup':       { field: 'twelfthGroup',       type: 'string' },
+  '12th_group':         { field: 'twelfthGroup',       type: 'string' },
+  'diplomacollege':     { field: 'diplomaCollege',     type: 'string' },
+  'diplomapercentage':  { field: 'diplomaPercentage',  type: 'number' },
+  'placement':          { field: 'placementStatus',    type: 'string' },
+  'placementstatus':    { field: 'placementStatus',    type: 'string' },
+  'placement_status':   { field: 'placementStatus',    type: 'string' },
+  'company':            { field: 'companyName',        type: 'string' },
+  'companyname':        { field: 'companyName',        type: 'string' },
+  'package':            { field: 'highestPackage',     type: 'number' },
+  'highestpackage':     { field: 'highestPackage',     type: 'number' },
+  'internship':         { field: 'internshipDetails',  type: 'string' },
+  'internshipdetails':  { field: 'internshipDetails',  type: 'string' },
+  'parentsincome':      { field: 'parentsIncome',      type: 'string' },
+  'income':             { field: 'parentsIncome',      type: 'string' },
+};
+
+// ─── Protected fields ─────────────────────────────────────────────
+const PROTECTED_FIELDS = ['registernumber', 'register_number', 'aadhaar', 'aadhaarnumber'];
+
+// ─── Check if looks like a register number ────────────────────────
+function isRegisterNumber(value) {
+  // Register numbers are typically 12 digits like 922523205002
+  return /^\d{10,15}$/.test(value.trim());
+}
+
+// ─── Detect if message is an update command ───────────────────────
+function isUpdateCommand(message) {
+  return /^update_/i.test(message.trim());
+}
+
+// ─── Cast value to correct type ───────────────────────────────────
+function castValue(value, type) {
+  if (type === 'number') {
+    const num = parseFloat(value);
+    return isNaN(num) ? value : num;
+  }
+  if (type === 'date') {
+    // Try DD/MM/YYYY or D/M/YYYY format first (Indian format)
+    const ddmmyyyy = value.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (ddmmyyyy) {
+      const [, dd, mm, yyyy] = ddmmyyyy;
+      const d = new Date(`${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`);
+      if (!isNaN(d.getTime())) return d;
+    }
+    // Try YYYY-MM-DD or other standard formats
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? value : d;
+  }
+  return value;
+}
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ─── Main Update Handler ──────────────────────────────────────────
+async function handleUpdateCommand(from, message) {
+  const text = message.trim();
+
+  // Format: Update_PART1_PART2 into NewValue
+  const regex = /^update_([a-zA-Z0-9_@.]+)_(.+?)\s+into\s+(.+)$/i;
+  const match = text.match(regex);
+
+  if (!match) {
+    return `⚠️ *Invalid format!*\n\nTwo ways to update:\n\n*1. By Register Number (recommended):*\n\`Update_RegNo_FieldName into NewValue\`\n\nExample:\n• \`Update_922523205002_Section into B\`\n• \`Update_922523205002_CGPA into 8.5\`\n• \`Update_922523205002_Mobile into 9876543210\`\n\n*2. By Old Value:*\n\`Update_FieldName_OldValue into NewValue\`\n\nExample:\n• \`Update_CGPA_7.52 into 8.5\`\n• \`Update_Email_old@gmail.com into new@gmail.com\``;
+  }
+
+  const part1    = match[1].trim(); // RegNo OR FieldName
+  const part2    = match[2].trim(); // FieldName OR OldValue
+  const newValue = match[3].trim();
+
+  try {
+    // ── FORMAT 2: Update by Register Number ──────────────────
+    // Update_922523205002_Section into B
+    if (isRegisterNumber(part1)) {
+      const regNo     = part1;
+      const fieldKey  = part2.toLowerCase().replace(/\s+/g, '');
+
+      if (PROTECTED_FIELDS.includes(fieldKey)) {
+        return `🔒 *"${part2}" cannot be updated.*\nThis field is protected.`;
+      }
+
+      const fieldInfo = FIELD_MAP[fieldKey];
+      if (!fieldInfo) {
+        return `❓ *Unknown field: "${part2}"*\n\nCommon fields:\nSection, CGPA, Mobile, Email, Address,\nArrear, BloodGroup, FatherMobile,\nMotherMobile, PlacementStatus, Company`;
+      }
+
+      const student = await Student.findOne({
+        registerNumber: { $regex: new RegExp(`^${escapeRegex(regNo)}$`, 'i') }
+      });
+
+      if (!student) {
+        return `❌ *No student found* with Register Number *${regNo}*\n\nCheck the register number and try again.`;
+      }
+
+      const castedValue = castValue(newValue, fieldInfo.type);
+      await Student.updateOne(
+        { registerNumber: { $regex: new RegExp(`^${escapeRegex(regNo)}$`, 'i') } },
+        { $set: { [fieldInfo.field]: castedValue } }
+      );
+
+      return `✅ *Update Successful!*
+
+👤 *Student* : ${student.name}
+🔢 *Reg No*  : ${student.registerNumber}
+📝 *Field*   : ${part2}
+🟢 *New Value*: ${newValue}
+
+🕒 ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
+    }
+
+    // ── FORMAT 1: Update by Old Value ────────────────────────
+    // Update_Section_A into B
+    const fieldKey = part1.toLowerCase().replace(/\s+/g, '');
+
+    if (PROTECTED_FIELDS.includes(fieldKey)) {
+      return `🔒 *"${part1}" cannot be updated.*\nThis field is protected.`;
+    }
+
+    const fieldInfo = FIELD_MAP[fieldKey];
+    if (!fieldInfo) {
+      return `❓ *Unknown field: "${part1}"*\n\nCommon fields:\nSection, CGPA, Mobile, Email, Address,\nArrear, BloodGroup, FatherMobile,\nMotherMobile, PlacementStatus, Company`;
+    }
+
+    const { field, type } = fieldInfo;
+    const oldValue = part2;
+
+    // Search by old value (including null)
+    let query;
+    if (oldValue.toLowerCase() === 'null' || oldValue.toLowerCase() === 'n/a') {
+      // Match null, empty, or N/A values
+      query = {
+        $or: [
+          { [field]: null },
+          { [field]: '' },
+          { [field]: { $regex: /^n\/a$/i } },
+          { [field]: { $exists: false } }
+        ]
+      };
+    } else {
+      query = { [field]: { $regex: new RegExp(`^${escapeRegex(oldValue)}$`, 'i') } };
+    }
+
+    const students = await Student.find(query);
+
+    if (students.length === 0) {
+      return `❌ *No student found* with *${part1}* = *"${oldValue}"*\n\n💡 *Tip: Use register number instead:*\n\`Update_RegNo_${part1} into ${newValue}\`\n\nExample:\n\`Update_922523205002_${part1} into ${newValue}\``;
+    }
+
+    const castedNewValue = castValue(newValue, type);
+    const result = await Student.updateMany(query, { $set: { [field]: castedNewValue } });
+    const updatedNames = students.map(s => `• ${s.name} (${s.registerNumber || 'N/A'})`).join('\n');
+
+    return `✅ *Update Successful!*
+
+📝 *Field*    : ${part1}
+🔴 *Old Value*: ${oldValue}
+🟢 *New Value*: ${newValue}
+
+👤 *Updated ${result.modifiedCount} student(s):*
+${updatedNames}
+
+🕒 ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
+
+  } catch (err) {
+    console.error('Update error:', err);
+    return `⚠️ *Update failed!*\nError: ${err.message}\n\nPlease try again.`;
+  }
+}
+
+module.exports = { handleUpdateCommand, isUpdateCommand };

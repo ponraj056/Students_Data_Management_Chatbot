@@ -1,0 +1,157 @@
+{
+  "users": [
+    {
+      "phone": "918072099157",
+      "empId": "ADMIN-121",
+      "name": "Mr. Suresh Admin",
+      "role": "ADMIN",
+      "department": "ALL",
+      "registeredAt": "2026-03-10T10:35:05.056Z"
+    },
+    {
+      "phone": "918072099157",
+      "empId": "HOD-AIDS-001",
+      "name": "Dr. Priya Sharma",
+      "role": "HOD",
+      "department": "AIDS",
+      "registeredAt": "2026-03-10T06:02:00.498Z"
+    },
+    {
+      "phone": "",
+      "empId": "HOD-AIML-001",
+      "name": "Dr. Rajesh Verma",
+      "role": "HOD",
+      "department": "AIML",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "",
+      "empId": "HOD-CSE-001",
+      "name": "Dr. Anitha Kumar",
+      "role": "HOD",
+      "department": "CSE",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "",
+      "empId": "HOD-ECE-001",
+      "name": "Dr. Mohan Rao",
+      "role": "HOD",
+      "department": "ECE",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "",
+      "empId": "HOD-EEE-001",
+      "name": "Dr. Kavitha Selvam",
+      "role": "HOD",
+      "department": "EEE",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "916381283497",
+      "empId": "HOD-IT-001",
+      "name": "Dr.Manivannan K",
+      "role": "HOD",
+      "department": "IT",
+      "registeredAt": "2026-03-16T06:50:19.239Z"
+    },
+    {
+      "phone": "",
+      "empId": "HOD-MECH-001",
+      "name": "Dr. Ramachandran P",
+      "role": "HOD",
+      "department": "MECH",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "",
+      "empId": "HOD-CIVIL-001",
+      "name": "Dr. Lakshmi Devi",
+      "role": "HOD",
+      "department": "CIVIL",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "",
+      "empId": "HOD-CHEMICAL-001",
+      "name": "Dr. Arjun Nair",
+      "role": "HOD",
+      "department": "CHEMICAL",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "",
+      "empId": "HOD-CSBS-001",
+      "name": "Dr. Meena Sundaram",
+      "role": "HOD",
+      "department": "CSBS",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "",
+      "empId": "HOD-CCE-001",
+      "name": "Dr. Vijay Anand",
+      "role": "HOD",
+      "department": "CCE",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "",
+      "empId": "HOD-BIOMED-001",
+      "name": "Dr. Nalini Krishnan",
+      "role": "HOD",
+      "department": "BIO-MED",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "",
+      "empId": "HOD-BIOTECH-001",
+      "name": "Dr. Saraswathi G",
+      "role": "HOD",
+      "department": "BIO-TECH",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "",
+      "empId": "FAC-AIDS-001",
+      "name": "Ms. Deepa Ravi",
+      "role": "FACULTY",
+      "department": "AIDS",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "",
+      "empId": "FAC-ECE-001",
+      "name": "Mr. Karthik M",
+      "role": "FACULTY",
+      "department": "ECE",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+    {
+      "phone": "919159498353",
+      "empId": "FAC-IT-121",
+      "name": "Ms. Vijayakumar G",
+      "role": "FACULTY",
+      "department": "IT",
+      "registeredAt": "2026-03-12T05:04:01.090Z"
+    },
+    {
+      "phone": "",
+      "empId": "FAC-MECH-001",
+      "name": "Mr. Senthil Kumar",
+      "role": "FACULTY",
+      "department": "MECH",
+      "registeredAt": "2024-01-15T10:00:00Z"
+    },
+  
+    {
+      "phone": "918072140941",
+      "empId": "922523205002",
+      "name": "AATHITHYA",
+      "role": "STUDENT",
+      "department": "IT",
+      "registeredAt": "2026-03-17T04:53:16.581Z"
+    }
+  ]
+}
