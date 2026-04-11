@@ -1,6 +1,7 @@
-﻿node_modules/
+node_modules/
 .env
-outputs/
 uploads/
+outputs/
 data/vectorstore.json
 *.log
+.DS_Store

@@ -7,8 +7,19 @@ const { isPhotoUploadCommand, handlePhotoUploadCommand, handleIncomingPhoto } = 
 const { startSearch, onYearSelected, onNameInput, onStudentSelected } = require('../handlers/searchHandler');
 const { handleAttendance } = require('../handlers/attendanceHandler');
 const { handleResults }    = require('../handlers/resultsHandler');
-const { handleReport }     = require('../handlers/reportHandler');
+const { handleReport, sendReportMenu, generateAllReports } = require('../handlers/reportHandler');
 const logger = require('../utils/logger');
+const { queryOllama } = require('../services/ollamaService');
+
+async function handleUserMessage(userMessage) {
+    try {
+        const response = await queryOllama(userMessage);
+        return response.choices[0].message.content; // Adjust based on API response structure
+    } catch (error) {
+        console.error('Error handling user message:', error.message);
+        return 'Sorry, I am unable to process your request right now.';
+    }
+}
 
 function verifyWebhook(req, res) {
   const mode      = req.query['hub.mode'];
@@ -39,7 +50,7 @@ async function processMessage(from, message) {
   const session = getSession(from);
   const type    = message.type;
 
-  // ── Registration flow ─────────────────────
+  // ── Registration flow ─────────────────────────────────────────
   if (!isRegistered(from)) {
     if (type === 'interactive' && session.stage === STAGES.AWAITING_ROLE) {
       const id = message.interactive?.list_reply?.id || '';
@@ -65,12 +76,33 @@ async function processMessage(from, message) {
 
       if (session.stage === STAGES.AWAITING_EMP_ID) {
         session.regId = text;
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        session.otp = otp;
-        setStage(from, STAGES.AWAITING_OTP);
-        logger.info('[OTP] ' + from + ' -> ' + otp);
-        await sendTextMessage(from, 'Your OTP is: ' + otp + '\n(Dev mode - shown on screen)\n\nPlease enter the OTP to verify:');
-        return;
+        const isFacultyOrHod = session.regRole === 'FACULTY' || session.regRole === 'HOD';
+        
+        if (isFacultyOrHod) {
+          // Directly register without OTP for Faculty and HOD
+          const user = registerUser(from, session.regId);
+          if (user) {
+            resetToIdle(from);
+            await sendTextMessage(from,
+              'Registration Successful!\n\n' +
+              'Name       : ' + user.name + '\n' +
+              'Role       : ' + getRoleLabel(user.role) + '\n' +
+              'Department : ' + user.department + '\n\n' +
+              'Type menu to get started.'
+            );
+          } else {
+            setStage(from, STAGES.AWAITING_ROLE);
+            await sendTextMessage(from, 'Employee ID not found. Please contact Admin.\nType hi to try again.');
+          }
+          return;
+        } else {
+          const otp = Math.floor(100000 + Math.random() * 900000).toString();
+          session.otp = otp;
+          setStage(from, STAGES.AWAITING_OTP);
+          logger.info('[OTP] ' + from + ' -> ' + otp);
+          await sendTextMessage(from, 'Your OTP is: ' + otp + '\n(Dev mode - shown on screen)\n\nPlease enter the OTP to verify:');
+          return;
+        }
       }
 
       if (session.stage === STAGES.AWAITING_ROLL_NO) {
@@ -82,24 +114,80 @@ async function processMessage(from, message) {
 
       if (session.stage === STAGES.AWAITING_STUDENT_DEPT) {
         session.regDept = text;
+        let std = null;
         try {
           const { getDeptModels } = require('../models/deptModels');
           const { Student } = getDeptModels(text);
-          const std = await Student.findOne({ rollNo: session.regId }).lean();
+          std = await Student.findOne({ rollNo: session.regId }).lean();
           session.regName = std ? std.name : 'Student';
         } catch (e) {
           session.regName = 'Student';
         }
+
+        if (!std) {
+          await sendTextMessage(from, '❌ Student record not found in the database. Please check your Roll Number and Department, and type *hi* to try again.');
+          resetToIdle(from);
+          return;
+        }
+
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         session.otp = otp;
         setStage(from, STAGES.AWAITING_OTP);
-        logger.info('[OTP] ' + from + ' -> ' + otp);
-        await sendTextMessage(from, 'Your OTP is: ' + otp + '\n(Dev mode - shown on screen)\n\nPlease enter the OTP to verify:');
+        logger.info(`[OTP] Generated for ${session.regId} -> ${otp}`);
+
+        let sentMessage = '';
+
+        // 1. Try sending to registered Email
+        if (std.email) {
+          try {
+            const nodemailer = require('nodemailer');
+            if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+              const transporter = nodemailer.createTransport({
+                service: 'gmail',
+                auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+              });
+              await transporter.sendMail({
+                from: process.env.EMAIL_USER,
+                to: std.email,
+                subject: 'College Bot - Login Verification',
+                text: `Hello ${std.name},\n\nYour OTP for WhatsApp Bot Login is: ${otp}\n\nDo not share this OTP with anyone. If you didn't request this, someone is trying to access your data.`
+              });
+              const parts = std.email.split('@');
+              sentMessage = `your registered email (${parts[0].substring(0, 3)}***@${parts[1]})`;
+            }
+          } catch (err) {
+            logger.error('Email OTP send failed: ' + err.message);
+          }
+        }
+
+        // 2. Fallback: Send to registered phone number (via WhatsApp)
+        if (!sentMessage && std.phone) {
+          let stdWhatsApp = std.phone.toString().replace(/\D/g, '');
+          if (stdWhatsApp.length === 10) stdWhatsApp = '91' + stdWhatsApp; // Format standard 10 digit Indian numbers
+
+          if (stdWhatsApp !== from) {
+            await sendTextMessage(stdWhatsApp, `🔒 *Security Alert*\nSomeone is trying to login to your account from another number.\n\nYour OTP is: *${otp}*`);
+            sentMessage = `your registered WhatsApp number (******${stdWhatsApp.slice(-4)})`;
+          } else {
+            // If they are logging in from their actual registered number, send it to them directly
+            await sendTextMessage(stdWhatsApp, `Your login OTP is: *${otp}*`);
+            sentMessage = `your current WhatsApp number`;
+          }
+        }
+
+        // 3. Dev Fallback (if the student has no email or phone in the database)
+        if (!sentMessage) {
+          sentMessage = `screen (Dev Mode: *${otp}*) because no email/phone was found in DB`;
+        }
+
+        await sendTextMessage(from, `🔒 *Security Verification*\n\nAn OTP has been sent to ${sentMessage}.\n\nPlease enter the 6-digit OTP to verify your identity:`);
         return;
       }
 
       if (session.stage === STAGES.AWAITING_OTP) {
-        if (text === session.otp) {
+        // Bypass OTP for Faculty and HOD
+        const isFacultyOrHod = session.regRole === 'FACULTY' || session.regRole === 'HOD';
+        if (isFacultyOrHod || text === session.otp) {
           if (session.regRole === 'STUDENT') {
             const user = registerStudent(from, session.regId, session.regDept, session.regName);
             resetToIdle(from);
@@ -149,7 +237,7 @@ async function processMessage(from, message) {
     return;
   }
 
-  // ── Registered user ───────────────────────
+  // ── Registered user ───────────────────────────────────────────
   const user = getUserByPhone(from);
   if (!user) { await sendTextMessage(from, 'User not found. Please contact Admin.'); return; }
 
@@ -159,43 +247,39 @@ async function processMessage(from, message) {
     if (handled) return;
   }
 
+  // ── Document / Image upload ───────────────────────────────────
   if (type === 'document' || type === 'image') {
     if (!canUpload(user)) {
       await sendTextMessage(from, 'You do not have upload permission.\nOnly Admin, HOD, and Faculty can upload data.');
       return;
     }
 
-  // ── Student Excel? Check columns first ──────
-  const { handleSmartExcelUpload, isExcelFile } = require('../parsers/Whatsappupload');
-  if (isExcelFile(message)) {
-    const reply = await handleSmartExcelUpload(message);
-    if (reply) {
-      await sendTextMessage(from, reply);
-      await sendTextMessage(from, 'You can send another file or type menu to continue.');
-      return;
+    const { handleSmartExcelUpload, isExcelFile } = require('../parsers/Whatsappupload');
+    if (isExcelFile(message)) {
+      const reply = await handleSmartExcelUpload(message);
+      if (reply) {
+        await sendTextMessage(from, reply);
+        await sendTextMessage(from, 'You can send another file or type menu to continue.');
+        return;
+      }
     }
-    // reply = null → attendance/results file → fall through
+
+    await handleUpload(from, message, user);
+    await sendTextMessage(from, 'You can send another file or type menu to continue.');
+    return;
   }
 
-  // ── Other files → existing handler ──────────
-  await handleUpload(from, message, user);
-  await sendTextMessage(from, 'You can send another file or type menu to continue.');
-  return;
-}
-
-  // ── Interactive messages ──────────────────
+  // ── Interactive messages ──────────────────────────────────────
   if (type === 'interactive') {
     const btnId  = message.interactive?.button_reply?.id || '';
     const listId = message.interactive?.list_reply?.id   || '';
     const id     = btnId || listId;
 
-    // Year selection buttons
     if (id.startsWith('YEAR_')) {
       await onYearSelected(from, id, user);
       return;
     }
 
-    // Student card selection from list
     if (id.startsWith('STU_')) {
       await onStudentSelected(from, id);
       return;
@@ -203,15 +287,14 @@ async function processMessage(from, message) {
 
     switch (id) {
       case 'UPDATE_PHOTO': {
-        const sess = getSession(from);
+        const sess  = getSession(from);
         const regNo = sess.lastViewedRegNo;
-        const name  = sess.lastViewedName || 'Student';
         if (!regNo) {
           await sendTextMessage(from, '❌ Could not find student. Please search again.');
           return;
         }
-        const { handlePhotoUploadCommand } = require('../handlers/photoUploadHandler');
-        await handlePhotoUploadCommand(from, `upload photo ${regNo}`);
+        const { handlePhotoUploadCommand: hpuc } = require('../handlers/photoUploadHandler');
+        await hpuc(from, `upload photo ${regNo}`);
         return;
       }
 
@@ -221,13 +304,11 @@ async function processMessage(from, message) {
         return;
 
       case 'MY_ATTENDANCE':
-        // Student views only their own attendance
         setStage(from, STAGES.AWAITING_ATTENDANCE);
         await handleAttendance(from, user.name, user);
         return;
 
       case 'MY_RESULTS':
-        // Student views only their own results
         setStage(from, STAGES.AWAITING_RESULTS);
         await handleResults(from, user.name, user);
         return;
@@ -244,19 +325,19 @@ async function processMessage(from, message) {
         );
         return;
 
-     case 'RESULTS':
-  setStage(from, STAGES.AWAITING_RESULTS);
-  await sendTextMessage(from,
-    '📊 *Results Mode is now ON*\n\n' +
-    '*Options:*\n' +
-    '▪ Roll number    : 922523205001\n' +
-    '▪ Toppers        : toppers sem 5\n' +
-    '▪ Arrears        : arrear students\n' +
-    '▪ Statistics     : pass fail stats\n' +
-    '▪ CGPA Ranking   : cgpa ranking\n' +
-    '▪ Subject Analysis : subject analysis sem 5\n\n' +
-    'Type *menu* to exit this mode.'
-  );
+      case 'RESULTS':
+        setStage(from, STAGES.AWAITING_RESULTS);
+        await sendTextMessage(from,
+          '📊 *Results Mode is now ON*\n\n' +
+          '*Options:*\n' +
+          '▪ Roll number      : 922523205001\n' +
+          '▪ Toppers          : toppers sem 5\n' +
+          '▪ Arrears          : arrear students\n' +
+          '▪ Statistics       : pass fail stats\n' +
+          '▪ CGPA Ranking     : cgpa ranking\n' +
+          '▪ Subject Analysis : subject analysis sem 5\n\n' +
+          'Type *menu* to exit this mode.'
+        );
         return;
 
       case 'UPLOAD':
@@ -280,6 +361,10 @@ async function processMessage(from, message) {
         ]);
         return;
       }
+      case 'REPORT_ALL': {
+  await generateAllReports(from, user);
+  return;
+}
 
       case 'FMT_EXCEL':
       case 'FMT_PDF':
@@ -289,43 +374,70 @@ async function processMessage(from, message) {
         resetToIdle(from);
         return;
       }
-    }
-  }
-// ── Text messages ──────────────────────────
-if (type === 'text') {
-  const text = message.text.body.trim();
 
-  // ── Update command ──────────────────────
-  const { handleUpdateCommand, isUpdateCommand } = require('../parsers/updateStudent');
-  if (isUpdateCommand(text)) {
-    if (user.role === 'STUDENT') {
-      // Student can only update their own record
-      const parts = text.match(/^update_([a-zA-Z0-9_@.]+)_/i);
-      const part1 = parts ? parts[1] : '';
-      const isOwnRegNo = part1.replace(/\s/g,'').toUpperCase() === user.empId.toUpperCase();
-      if (!isOwnRegNo) {
-        await sendTextMessage(from,
-          '🔒 *Access Denied*\n\n' +
-          'You can only update your own data.\n\n' +
-          `Your register number: *${user.empId}*\n` +
-          `Use: \`Update_${user.empId}_FieldName into NewValue\``
-        );
-        return;
+      default:
+        break;
+    }
+    return;
+  }
+
+  // ── Text messages ─────────────────────────────────────────────
+  if (type === 'text') {
+    const text = message.text.body.trim();
+
+    // ── Update command ──────────────────────────────────────────
+    const { handleUpdateCommand, isUpdateCommand } = require('../parsers/updateStudent');
+    if (isUpdateCommand(text)) {
+      if (user.role === 'STUDENT') {
+        const parts = text.match(/^update_([a-zA-Z0-9_@.]+)_/i);
+        const part1 = parts ? parts[1] : '';
+        const isOwnRegNo = part1.replace(/\s/g,'').toUpperCase() === user.empId.toUpperCase();
+        if (!isOwnRegNo) {
+          await sendTextMessage(from,
+            '🔒 *Access Denied*\n\n' +
+            'You can only update your own data.\n\n' +
+            `Your register number: *${user.empId}*\n` +
+            `Use: \`Update_${user.empId}_FieldName into NewValue\``
+          );
+          return;
+        }
       }
+      const reply = await handleUpdateCommand(from, text);
+      await sendTextMessage(from, reply);
+      return;
     }
-    const reply = await handleUpdateCommand(from, text);
-    await sendTextMessage(from, reply);
-    return;
-  }
 
-  // ── Photo Upload Command ──────────────────
-  if (isPhotoUploadCommand(text)) {
-    await handlePhotoUploadCommand(from, text);
-    return;
-  }
+    // ── Photo Upload Command ────────────────────────────────────
+    if (isPhotoUploadCommand(text)) {
+      await handlePhotoUploadCommand(from, text);
+      return;
+    }
 
-  // Global commands
-  if (/^(menu|hi|hello|start|help|back|home)$/i.test(text)) {
+    // ── All Reports Download ────────────────────────────────────
+    if (/download all|full report|all reports/i.test(text)) {
+      await generateAllReports(from, user);
+      return;
+    }
+
+    // ── Global commands ─────────────────────────────────────────
+    if (/^(logout|unregister)$/i.test(text)) {
+      const fs = require('fs');
+      const path = require('path');
+      const usersPath = path.join(__dirname, '../../data/users.json');
+      if (fs.existsSync(usersPath)) {
+        let db = JSON.parse(fs.readFileSync(usersPath, 'utf8'));
+        let uIdx = db.users.findIndex(u => u.phone === from);
+        if (uIdx !== -1) {
+          db.users[uIdx].phone = ""; // Clear the phone to unregister the user
+          fs.writeFileSync(usersPath, JSON.stringify(db, null, 2));
+        }
+      }
+      resetToIdle(from);
+      await sendTextMessage(from, '✅ You have been successfully logged out.\n\nType *hi* to register again with a different role or ID.');
+      return;
+    }
+
+    if (/^(menu|hi|hello|start|help|back|home)$/i.test(text)) {
       resetToIdle(from);
       await sendMainMenu(from, user);
       return;
@@ -337,16 +449,14 @@ if (type === 'text') {
       return;
     }
 
-    // Stage-based routing
+    // ── Stage-based routing ─────────────────────────────────────
     switch (session.stage) {
 
-      // ── Search: year already selected → name input
       case STAGES.AWAITING_NAME_INPUT:
         await onNameInput(from, text, user);
         return;
 
       case STAGES.AWAITING_ATTENDANCE:
-        // Student can only view their own attendance
         if (user.role === 'STUDENT') {
           await handleAttendance(from, user.name, user);
         } else {
@@ -356,7 +466,6 @@ if (type === 'text') {
         return;
 
       case STAGES.AWAITING_RESULTS:
-        // Student can only view their own results
         if (user.role === 'STUDENT') {
           await handleResults(from, user.name, user);
         } else {
@@ -366,47 +475,46 @@ if (type === 'text') {
         return;
 
       case STAGES.AWAITING_REPORT_FORMAT: {
-        const fmt = text.toLowerCase().includes('pdf')  ? 'pdf'  :
-                    text.toLowerCase().includes('text') ? 'text' : 'excel';
-        await handleReport(from, session.pendingQuery || '', user, fmt);
+        const fmt = /pdf/i.test(text) ? 'pdf' : /text/i.test(text) ? 'text' : 'excel';
+        if (/download all|full report|all reports/i.test(text)) {
+          await generateAllReports(from, user);
+        } else {
+          await handleReport(from, session.pendingQuery || '', user, fmt);
+        }
         resetToIdle(from);
         return;
       }
     }
 
-    // No active stage - show menu
-    await sendMainMenu(from, user);
+    // No active stage - send unrecognized text to Ollama AI
+    const aiReply = await handleUserMessage(text);
+    await sendTextMessage(from, aiReply);
     return;
   }
 }
 
-// ── Main Menu ─────────────────────────────
+// ── Main Menu ─────────────────────────────────────────────────────
 async function sendMainMenu(from, user) {
 
-  // ── STUDENT: only their own data ──────────
   if (user.role === 'STUDENT') {
     await sendListMessage(from,
       'V.S.B ENGINEERING COLLEGE',
       'Welcome, ' + user.name + '!\n' +
       'Role: 🎒 Student | Dept: ' + user.department,
       'Choose Action',
-      [
-        {
-          title: 'My Profile',
-          rows: [
-            { id: 'SEARCH_STUDENT',   title: 'View My Profile',    description: 'View your student details' },
-            { id: 'MY_ATTENDANCE',    title: 'My Attendance',      description: 'View your attendance' },
-            { id: 'MY_RESULTS',       title: 'My Results',         description: 'View your exam results' },
-          ]
-        }
-      ]
+      [{
+        title: 'My Profile',
+        rows: [
+          { id: 'SEARCH_STUDENT', title: 'View My Profile',  description: 'View your student details' },
+          { id: 'MY_ATTENDANCE',  title: 'My Attendance',    description: 'View your attendance' },
+          { id: 'MY_RESULTS',     title: 'My Results',       description: 'View your exam results' },
+        ]
+      }]
     );
     return;
   }
 
-  // ── Admin / Faculty / HOD: full menu ──────
   const canUploadUser = canUpload(user);
-
   const sections = [
     {
       title: 'Student',
@@ -425,7 +533,8 @@ async function sendMainMenu(from, user) {
         { id: 'REPORT_STUDENT', title: 'Student Report',    description: 'Download student list' },
         { id: 'REPORT_ATTEND',  title: 'Attendance Report', description: 'Download as Excel or PDF' },
         { id: 'REPORT_RESULT',  title: 'Results Report',    description: 'Download marks report' },
-      ]
+        { id: 'REPORT_ALL',      title: '📦 All Reports',       description: '4 years × Student+Attendance+Results' },
+  ]
     }
   ];
 
@@ -445,4 +554,4 @@ async function sendMainMenu(from, user) {
   );
 }
 
-module.exports = { verifyWebhook, handleWebhook };
+module.exports = { verifyWebhook, handleWebhook, handleUserMessage };
